@@ -5,6 +5,9 @@ codex-lb на панели задач. По нажатию открывает po
 Reset и текущей/новой версией codex-lb, включая beta-релизы GitHub.
 Проверена с Windhawk 1.7.3.
 
+<img width="727" height="396" alt="изображение" src="https://github.com/user-attachments/assets/809beab4-68a8-4f99-8e9e-d02832749111" />
+
+
 ## Как подключить
 
 1. Скопируйте **всю папку проекта** в постоянное место на диске.
