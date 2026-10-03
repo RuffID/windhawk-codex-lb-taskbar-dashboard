@@ -14,7 +14,8 @@
 - editor/ — настройка clangd; tests/ — C++ regression harness.
 - README.md — короткое описание для пользователя и порядок установки/обновления.
 - .clangd выбирает editor/compile_commands.json; .gitignore исключает кеши,
-  локальную базу clangd и двоичные результаты сборки. .git — служебные данные Git.
+  локальную базу clangd, служебную папку Visual Studio .vs/ и двоичные результаты
+  сборки. .git — служебные данные Git.
 
 Абсолютный include-путь вручную задаётся только в @compilerOptions корневого
 мода. Внутри проекта include относительные, .h имеют #pragma once и явные

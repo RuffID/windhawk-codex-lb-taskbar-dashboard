@@ -2,6 +2,9 @@
 **/.cache/
 /editor/compile_commands.json
 
+# Local Visual Studio workspace data.
+/.vs/
+
 # Compiler and test outputs.
 *.exe
 *.dll
