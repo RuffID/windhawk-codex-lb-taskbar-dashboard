@@ -1,0 +1,13 @@
+# Generated clangd data and machine-specific compilation database.
+**/.cache/
+/editor/compile_commands.json
+
+# Compiler and test outputs.
+*.exe
+*.dll
+*.whl
+*.obj
+*.o
+*.pdb
+*.pch
+*.log
