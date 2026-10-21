@@ -13,6 +13,8 @@ COM exports остаются глобальными, остальные функ
 Сохраняй порядок запросов и публикации данных, пять попыток usage, отмену retry waits,
 завершение scheduled/manual задач перед применением настроек и очистку при unloading.
 При выгрузке закрываются popup, события/revokers, timers/work, watcher и cancel event.
+Manual refresh и смена настроек не сбрасывают общий GitHub cooldown;
+runtime вызывает versions, где ожидание межпроцессного mutex отменяется cancel event.
 Не запускай lifecycle или Explorer для проверки без явного разрешения пользователя.
 
 ## Актуальность

@@ -63,7 +63,6 @@ void ApplySettingsChanged() try {
         g_accountsAvailable = false;
         g_dashboardAccounts.clear();
         g_dashboardVersion = {};
-        g_nextReleaseCheckTick = 0;
     }
 
     if (!ResetEvent(g_dashboardCancelEvent)) {

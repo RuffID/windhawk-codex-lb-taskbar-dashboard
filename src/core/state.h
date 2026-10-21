@@ -35,18 +35,25 @@ std::atomic<DWORD> g_popupThreadId;
 std::atomic<DWORD> g_popupClosedByOutsideClickTick;
 bool g_refreshButtonHovered;
 bool g_refreshButtonPressed;
+RECT g_popupGithubRect{};
+RECT g_popupModGithubRect{};
+RECT g_popupReleaseRect{};
+std::wstring g_popupReleaseUrl;
+std::wstring g_popupPressedUrl;
 std::mutex g_popupCreationMutex;
 std::mutex g_widgetsMutex;
 
 constexpr PCWSTR DASHBOARD_OFFLINE_TEXT = L"Сервер недоступен";
+constexpr PCWSTR CODEX_LB_GITHUB_URL = L"https://github.com/Soju06/codex-lb";
+constexpr PCWSTR MOD_GITHUB_URL = L"https://github.com/RuffID/windhawk-codex-lb-taskbar-dashboard";
 constexpr PCWSTR LOG_FILE_PATH = L"C:\\codex-lb-taskbar-dashboard.log";
 constexpr PCWSTR FALLBACK_LOG_DIR_NAME = L"CodexLbTaskbarDashboard";
 constexpr PCWSTR FALLBACK_LOG_FILE_NAME = L"dashboard.log";
 constexpr DWORD MIN_SETTING_SECONDS = 30;
 constexpr DWORD MAX_SETTING_SECONDS = 2147483;
 constexpr int DASHBOARD_MAX_ATTEMPTS = 5;
-constexpr ULONGLONG RELEASE_CHECK_INTERVAL_MS = 60ULL * 60ULL * 1000ULL;
-constexpr ULONGLONG RELEASE_CHECK_FAILURE_INTERVAL_MS = 15ULL * 60ULL * 1000ULL;
+constexpr ULONGLONG RELEASE_CHECK_INTERVAL_SECONDS = 120;
+constexpr ULONGLONG RELEASE_RATE_LIMIT_FALLBACK_SECONDS = 3600;
 constexpr UINT WM_TOGGLE_DASHBOARD_POPUP = WM_APP + 1;
 constexpr UINT WM_REFRESH_DASHBOARD_POPUP = WM_APP + 2;
 
@@ -79,7 +86,7 @@ struct DashboardAccount {
 
 std::vector<DashboardAccount> g_dashboardAccounts;
 
-enum class ReleaseCheckStatus { Pending, Succeeded, Failed };
+enum class ReleaseCheckStatus { Pending, Succeeded, Failed, RateLimited };
 
 struct DashboardVersion {
     std::wstring current;
@@ -89,7 +96,6 @@ struct DashboardVersion {
 };
 
 DashboardVersion g_dashboardVersion;
-ULONGLONG g_nextReleaseCheckTick;
 
 struct WidgetState {
     DWORD threadId = 0;

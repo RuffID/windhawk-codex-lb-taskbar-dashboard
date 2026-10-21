@@ -7,7 +7,8 @@
 - config: загрузка настроек и snapshot.
 - network: асинхронный WinHTTP с отменой и общим deadline.
 - accounts: dashboard-сессия, аккаунты и отдельный API-key usage.
-- versions: SemVer, runtime/latest codex-lb и независимые GitHub-релизы.
+- versions: SemVer, runtime/latest codex-lb, независимые GitHub-релизы и
+  release_cache.h с межпроцессной блокировкой/файловым кешем без авторизационных данных.
 - ui: отрисовка popup, его окно и XAML-виджеты taskbar.
 - integration: COM/XAML TAP, хуки, UI-потоки, таймеры и жизненный цикл.
 

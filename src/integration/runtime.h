@@ -37,10 +37,6 @@ void QueueDashboardRefresh() {
         }
     }
 
-    {
-        std::lock_guard<std::mutex> dashboardLock(g_dashboardMutex);
-        g_nextReleaseCheckTick = 0;
-    }
     SubmitThreadpoolWork(g_dashboardRefreshWork);
 }
 

@@ -3,6 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <exception>
 
 #include "src/integration/lifecycle.h"
 
@@ -301,7 +302,7 @@ void TestVersions() {
         {"draft":false,"tag_name":"v1.2.3-beta.10","prerelease":true},
         {"draft":true,"tag_name":"v9.0.0"},
         {"draft":false,"tag_name":"not-a-version"}
-    ])", latest) && latest == L"1.2.3-beta.10", "release selection changed");
+    ])", latest) && latest == L"v1.2.3-beta.10", "release selection lost the GitHub tag");
     Require(!FindLatestPublishedRelease(L"[]", latest) &&
                 !FindLatestPublishedRelease(L"{}", latest),
             "invalid or empty release checks became successful");
@@ -324,6 +325,189 @@ void TestVersions() {
                 version.current.empty() && !version.latestUpdateAvailable,
             "malformed runtime payload retained old data");
     std::cout << "PASS SemVer, beta releases, failures and independent latest indicator\n";
+}
+
+void TestGitHubDiagnostics() {
+    Require(GetGitHubErrorMessage(
+                LR"({"message":"API rate limit exceeded","documentation_url":"https://docs.github.com","other":"not logged"})") ==
+                L"API rate limit exceeded",
+            "GitHub diagnostic lost message or included unrelated response fields");
+    Require(GetGitHubErrorMessage(LR"({"message":"Denied\r\nnext\tline"})") == L"Denied  next line",
+            "GitHub response injected log lines");
+    Require(GetGitHubErrorMessage(L"<html>Forbidden</html>") == L"<non-JSON response>" &&
+                GetGitHubErrorMessage(L"") == L"<empty response>" &&
+                GetGitHubErrorMessage(LR"({"message":403})") == L"<missing>",
+            "missing or malformed GitHub error details were misrepresented");
+    Require(FormatGitHubLogValue(L"0", 64) == L"0" &&
+                FormatGitHubLogValue(L"1792600000", 64) == L"1792600000" &&
+                FormatGitHubLogValue(L"120", 64) == L"120" &&
+                FormatGitHubLogValue(L"", 64) == L"<missing>" &&
+                FormatGitHubLogValue(std::wstring(300, L'x')).size() == 259,
+            "rate-limit diagnostics lost zero values or failed to bound output");
+    std::cout << "PASS GitHub diagnostic message extraction, missing fields and bounded log output\n";
+}
+
+void TestPopupReleaseStatus() {
+    DashboardVersion version;
+    Require(GetPopupReleaseBadge(version).releaseUrl.empty(),
+            "pending check exposed a release link");
+    version.current = L"1.25.0-beta.9";
+    version.latest = L"v1.25.0-beta.10";
+    version.releaseCheckStatus = ReleaseCheckStatus::Succeeded;
+    auto badge = GetPopupReleaseBadge(version);
+    Require(badge.text == L"Доступно: v1.25.0-beta.10" &&
+                badge.releaseUrl == L"https://github.com/Soju06/codex-lb/releases/tag/v1.25.0-beta.10" &&
+                badge.borderColor == RGB(106, 212, 124) &&
+                badge.textColor == RGB(198, 209, 224),
+            "new beta did not expose its exact green release link");
+    version.current = L"1.25.0-beta.10";
+    badge = GetPopupReleaseBadge(version);
+    Require(badge.text == L"Нет новых версий" && badge.releaseUrl.empty() &&
+                badge.borderColor == RGB(46, 62, 84) &&
+                badge.textColor == RGB(198, 209, 224),
+            "equal installed version did not report up-to-date");
+    version.current = L"1.25.0";
+    Require(GetPopupReleaseBadge(version).text == L"Нет новых версий",
+            "older beta was offered over installed stable release");
+    version.current.clear();
+    Require(GetPopupReleaseBadge(version).text != L"Нет новых версий" &&
+                GetPopupReleaseBadge(version).releaseUrl.empty(),
+            "unknown installed version was reported up-to-date");
+    version.releaseCheckStatus = ReleaseCheckStatus::Failed;
+    badge = GetPopupReleaseBadge(version);
+    Require(badge.text == L"Не удалось получить новые версии с GitHub" &&
+                badge.borderColor == RGB(242, 113, 113) &&
+                badge.textColor == RGB(198, 209, 224) && badge.releaseUrl.empty(),
+            "failed check retained a stale release link or success state");
+    version.releaseCheckStatus = ReleaseCheckStatus::RateLimited;
+    badge = GetPopupReleaseBadge(version);
+    Require(badge.text == L"Превышено число запросов в GitHub" &&
+                badge.borderColor == RGB(242, 113, 113) &&
+                badge.textColor == RGB(198, 209, 224) && badge.releaseUrl.empty(),
+            "rate-limit status was lost or colored its text");
+    std::cout << "PASS popup release states and exact tag links\n";
+}
+
+void TestGitHubRateLimitSchedule() {
+    ReleaseCacheData cache;
+    Require(ReserveReleaseCheck(cache, 1000) && cache.nextCheckUtc == 1120 &&
+                !ReserveReleaseCheck(cache, 1000) && !ReserveReleaseCheck(cache, 1119) &&
+                ReserveReleaseCheck(cache, 1120),
+            "repeated/manual checks bypassed the two-minute interval");
+    HttpResponse response;
+    response.status = 403;
+    response.body = LR"({"message":"Resource not accessible"})";
+    Require(!IsGitHubRateLimited(response) && GetGitHubNextCheckUtc(response, 1000) == 1120,
+            "ordinary forbidden response was misclassified as a rate limit");
+    response.rateLimitRemaining = L"0";
+    response.rateLimitReset = L"4600";
+    Require(IsGitHubRateLimited(response) && GetGitHubNextCheckUtc(response, 1000) == 4601,
+            "primary rate limit did not honor the reset timestamp");
+    response.status = 200;
+    Require(!IsGitHubRateLimited(response) && GetGitHubNextCheckUtc(response, 1000) == 4601,
+            "successful final quota request ignored reset or became an error");
+    response.status = 403;
+    response.retryAfter = L"7200";
+    Require(GetGitHubNextCheckUtc(response, 1000) == 8200,
+            "Retry-After was ignored when later than reset");
+    response = {};
+    response.status = 403;
+    response.body = LR"({"message":"You have exceeded a secondary RATE LIMIT."})";
+    Require(IsGitHubRateLimited(response) && GetGitHubNextCheckUtc(response, 1000) == 4600,
+            "secondary rate limit without headers was not deferred");
+    response.status = 429;
+    response.body.clear();
+    response.retryAfter = L"Thu, 01 Jan 1970 01:00:00 GMT";
+    Require(GetGitHubNextCheckUtc(response, 1000) == 3601,
+            "HTTP-date Retry-After was not respected");
+    response.retryAfter = L"1";
+    Require(GetGitHubNextCheckUtc(response, 1000) == 1120,
+            "short Retry-After bypassed the minimum interval");
+    response.retryAfter = L"99999999999999999999999999";
+    response.rateLimitReset = L"invalid";
+    Require(GetGitHubNextCheckUtc(response, 1000) == 4600,
+            "malformed rate-limit timestamps overflowed or disabled the backoff");
+    response.status = 503;
+    response.retryAfter = L"300";
+    Require(!IsGitHubRateLimited(response) && GetGitHubNextCheckUtc(response, 1000) == 1300,
+            "server Retry-After was ignored or mislabeled as rate limiting");
+    std::cout << "PASS GitHub throttling, primary/secondary limits and retry deadlines\n";
+}
+
+void TestSharedReleaseCache() {
+    wchar_t temporaryPath[MAX_PATH];
+    DWORD length = GetTempPathW(ARRAYSIZE(temporaryPath), temporaryPath);
+    Require(length > 0 && length < ARRAYSIZE(temporaryPath), "test temp path failed");
+    GUID id{};
+    winrt::check_hresult(CoCreateGuid(&id));
+    wchar_t idText[40];
+    Require(StringFromGUID2(id, idText, ARRAYSIZE(idText)) > 0, "test GUID failed");
+    std::wstring path = std::wstring(temporaryPath) + L"codex-lb-cache-" + idText + L".json";
+    struct Cleanup {
+        std::wstring path;
+        ~Cleanup() { DeleteFileW(path.c_str()); DeleteFileW((path + L".tmp").c_str()); }
+    } cleanup{path};
+    EventHandle start, cancel;
+    std::atomic<int> requestCount = 0;
+    std::array<ReleaseCacheData, 2> results;
+    std::array<std::exception_ptr, 2> errors;
+    auto worker = [&](size_t index) {
+        try {
+            winrt::init_apartment(winrt::apartment_type::multi_threaded);
+            Require(WaitForSingleObject(start.handle, 5000) == WAIT_OBJECT_0, "test start timed out");
+            SharedReleaseCache shared;
+            Require(shared.Open(path, cancel.handle), "test lock was cancelled");
+            auto data = shared.Read();
+            if (ReserveReleaseCheck(data, 1000)) {
+                shared.Write(data);
+                requestCount++;
+                data.status = ReleaseCheckStatus::RateLimited;
+                data.nextCheckUtc = 5000;
+                shared.Write(data);
+            }
+            results[index] = data;
+            winrt::uninit_apartment();
+        } catch (...) {
+            errors[index] = std::current_exception();
+        }
+    };
+    std::thread first(worker, 0), second(worker, 1);
+    SetEvent(start.handle);
+    first.join();
+    second.join();
+    for (const auto& error : errors) {
+        if (error) { std::rethrow_exception(error); }
+    }
+    Require(requestCount == 1 && results[0].status == ReleaseCheckStatus::RateLimited &&
+                results[1].status == ReleaseCheckStatus::RateLimited &&
+                results[0].nextCheckUtc == 5000 && results[1].nextCheckUtc == 5000,
+            "independent cache clients duplicated a request or lost the shared rate limit");
+    {
+        SharedReleaseCache shared;
+        Require(shared.Open(path, cancel.handle), "reopened cache was cancelled");
+        auto data = shared.Read();
+        Require(!ReserveReleaseCheck(data, 4999) && ReserveReleaseCheck(data, 5000),
+                "cache reopen bypassed the persisted cooldown");
+        shared.Write(data);
+    }
+    {
+        SharedReleaseCache shared;
+        Require(shared.Open(path, cancel.handle), "reservation reopen was cancelled");
+        auto data = shared.Read();
+        Require(!ReserveReleaseCheck(data, 5000) && data.nextCheckUtc == 5120,
+                "unfinished request lost its persisted reservation");
+        data.status = ReleaseCheckStatus::Succeeded;
+        data.latest = L"v1.25.0-beta.10";
+        shared.Write(data);
+        auto reloaded = shared.Read();
+        Require(reloaded.latest == L"v1.25.0-beta.10" &&
+                    reloaded.status == ReleaseCheckStatus::Succeeded,
+                "cached success lost its exact release tag");
+    }
+    SetEvent(cancel.handle);
+    SharedReleaseCache cancelled;
+    Require(!cancelled.Open(path, cancel.handle), "cache ignored refresh cancellation");
+    std::cout << "PASS shared release cache contention, persistence, reservation and cancellation\n";
 }
 
 void TestRenderingMathAndLogin() {
@@ -355,6 +539,46 @@ void TestRenderingMathAndLogin() {
     std::cout << "PASS alpha blending, DPI, scrolling, host display and login escaping\n";
 }
 
+void TestPopupLinksAndIcon() {
+    g_popupGithubRect = RECT{100, 15, 116, 31};
+    g_popupModGithubRect = RECT{200, 41, 216, 57};
+    g_popupReleaseRect = RECT{300, 38, 420, 60};
+    g_popupReleaseUrl = L"https://github.com/Soju06/codex-lb/releases/tag/v1.25.0-beta.10";
+    Require(GetPopupLinkAt(POINT{108, 23}) == L"https://github.com/Soju06/codex-lb/releases" &&
+                GetPopupLinkAt(POINT{208, 49}) == L"https://github.com/RuffID/windhawk-codex-lb-taskbar-dashboard" &&
+                GetPopupLinkAt(POINT{190, 49}).empty() &&
+                GetPopupLinkAt(POINT{216, 49}).empty() &&
+                GetPopupLinkAt(POINT{320, 48}) == g_popupReleaseUrl &&
+                GetPopupLinkAt(POINT{250, 48}).empty() &&
+                GetPopupLinkAt(POINT{116, 23}).empty(),
+            "popup link hit targets overlap text or lose tag URL");
+    g_popupReleaseUrl.clear();
+    Require(GetPopupLinkAt(POINT{320, 48}).empty(),
+            "non-update status retained a release link");
+    g_popupGithubRect = {};
+    g_popupModGithubRect = {};
+    g_popupReleaseRect = {};
+
+    for (UINT dpi : {96U, 144U, 192U}) {
+        PopupCanvas canvas;
+        canvas.Create(nullptr, 64, 64, dpi);
+        const DWORD background = PremultiplyPopupPixel(PopupDibColor(POPUP_HEADER_COLOR));
+        std::fill_n(canvas.pixels, 64 * 64, background);
+        SetPopupDcScale(canvas.dc, dpi);
+        DrawPopupGithubIcon(canvas, RECT{4, 4, 20, 20});
+        bool opaque = false, antialiased = false;
+        for (int i = 0; i < 64 * 64; i++) {
+            DWORD alpha = canvas.pixels[i] >> 24;
+            opaque = opaque || alpha == 255;
+            antialiased = antialiased || (alpha > 232 && alpha < 255);
+        }
+        Require(opaque && antialiased && canvas.pixels[0] == background &&
+                    canvas.pixels[63 * 64 + 63] == background,
+                "GitHub icon lost its fill, antialiasing or drawing bounds at DPI");
+    }
+    std::cout << "PASS popup link targets and GitHub icon alpha at 96/144/192 DPI\n";
+}
+
 int main(int argc, char** argv) {
     if (argc == 2 && std::string(argv[1]) == "--offline") {
         try {
@@ -362,7 +586,12 @@ int main(int argc, char** argv) {
             TestQuotaAccounts();
             TestResetCredits();
             TestVersions();
+            TestGitHubDiagnostics();
+            TestGitHubRateLimitSchedule();
+            TestSharedReleaseCache();
+            TestPopupReleaseStatus();
             TestRenderingMathAndLogin();
+            TestPopupLinksAndIcon();
             winrt::uninit_apartment();
             return 0;
         } catch (const std::exception& error) {

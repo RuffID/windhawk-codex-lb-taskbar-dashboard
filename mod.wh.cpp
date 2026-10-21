@@ -2,11 +2,11 @@
 // @id              codex-lb-taskbar-dashboard
 // @name            Codex LB Taskbar Dashboard
 // @description     Shows a compact codex-lb dashboard in the Windows 11 taskbar
-// @version         1.1
+// @version         1.3
 // @author          P.D.G.
 // @include         explorer.exe
 // @architecture    x86-64
-// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lgdi32 -lwinhttp -I"D:/Media/User/source/repos/windhawk-codex-lb-taskbar-dashboard"
+// @compilerOptions -lole32 -loleaut32 -lruntimeobject -lgdi32 -lwinhttp -lshell32 -I"D:/Media/User/source/repos/windhawk-codex-lb-taskbar-dashboard"
 // ==/WindhawkMod==
 
 // ==WindhawkModReadme==
@@ -70,14 +70,32 @@ The popup also requests `/api/runtime/version` for the running codex-lb version
 and independently checks the 100 most recent published GitHub releases,
 including prereleases. Versions are compared by SemVer, so `beta.10` is newer
 than `beta.9` and a stable release is newer than a beta of the same version.
-A newer version is highlighted in yellow beside the running version and URL.
+A GitHub icon immediately beside the dashboard host opens the project's releases page.
+The `Мод v.<version>` label has a separate GitHub icon on its right that opens
+`https://github.com/RuffID/windhawk-codex-lb-taskbar-dashboard`.
+Below the running version, an outlined badge shows the release check result:
+`Доступно: <tag>` with a clickable original GitHub release tag and a green border,
+`Нет новых версий` with the default border, or an error with a red border.
+All badge text and link underlines use the default text color. Rate limiting
+has its own message: `Превышено число запросов в GitHub`.
+A pending check and an unknown running version have separate messages;
+an unknown version is never reported as up to date.
 The taskbar shows a blue circled exclamation mark beside the percentage only
 when `/api/runtime/version` reports `updateAvailable: true`. This indicator
 uses codex-lb's latest-release check, independently of the popup's beta check.
-GitHub checks are cached for one hour, or fifteen minutes after a failure;
-manual refresh checks again. Failed checks are shown as unavailable, not as
+GitHub checks share a persistent per-user cache and an interprocess mutex.
+Requests are at least two minutes apart, including manual refresh and mod reloads.
+Rate limiting defers checks until X-RateLimit-Reset/Retry-After allows them;
+without a usable deadline the mod waits one hour. Manual refresh still updates
+accounts immediately. Failed checks are shown as unavailable, not as
 confirmation that the installed version is up to date. GitHub requests never
 include the dashboard cookie or proxy API key.
+With Windhawk mod logging enabled, failed GitHub checks log the HTTP status,
+the JSON message and X-RateLimit-Remaining, X-RateLimit-Reset (Unix seconds),
+and Retry-After headers. Missing values are explicit; message text is bounded
+and control characters are replaced with spaces.
+The cache is stored in `%LOCALAPPDATA%\CodexLbTaskbarDashboard\github-releases-v1.json`;
+it contains only the release tag, check status and next allowed check time.
 
 The popup has a manual refresh button in the top-right area. The text to the
 right of the button shows the local time of the last successful update. The

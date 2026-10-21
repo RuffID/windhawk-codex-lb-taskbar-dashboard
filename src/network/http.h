@@ -128,7 +128,37 @@ struct HttpResponse {
     DWORD status = 0;
     std::wstring body;
     std::wstring setCookie;
+    std::wstring rateLimitRemaining;
+    std::wstring rateLimitReset;
+    std::wstring retryAfter;
 };
+
+std::wstring QueryOptionalHttpHeader(HINTERNET request, PCWSTR name) {
+    DWORD size = 0;
+    if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_CUSTOM, name, nullptr,
+                             &size, WINHTTP_NO_HEADER_INDEX)) {
+        DWORD error = GetLastError();
+        if (error == ERROR_WINHTTP_HEADER_NOT_FOUND) {
+            return {};
+        }
+        if (error != ERROR_INSUFFICIENT_BUFFER) {
+            winrt::throw_hresult(HRESULT_FROM_WIN32(error));
+        }
+    }
+    if (!size) {
+        return {};
+    }
+    std::wstring value(size / sizeof(wchar_t), L'\0');
+    if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_CUSTOM, name, value.data(),
+                             &size, WINHTTP_NO_HEADER_INDEX)) {
+        winrt::throw_last_error();
+    }
+    value.resize(size / sizeof(wchar_t));
+    while (!value.empty() && value.back() == L'\0') {
+        value.pop_back();
+    }
+    return value;
+}
 
 std::wstring ExtractDashboardCookie(const std::wstring& setCookieHeaders) {
     constexpr PCWSTR COOKIE_NAME = L"codex_lb_dashboard_session=";
@@ -152,7 +182,9 @@ bool HttpRequest(const Settings& settings,
                  const std::wstring& cookie,
                  const std::string& body,
                  HttpResponse& response,
-                 const std::wstring& bearerToken = {}) {
+                 const std::wstring& bearerToken = {},
+                 bool collectRateLimitHeaders = false) {
+    response = {};
     if (IsDashboardRefreshCancelled()) {
         return false;
     }
@@ -292,6 +324,13 @@ bool HttpRequest(const Settings& settings,
         return false;
     }
 
+    response.status = status;
+    if (collectRateLimitHeaders) {
+        response.rateLimitRemaining = QueryOptionalHttpHeader(request.handle, L"X-RateLimit-Remaining");
+        response.rateLimitReset = QueryOptionalHttpHeader(request.handle, L"X-RateLimit-Reset");
+        response.retryAfter = QueryOptionalHttpHeader(request.handle, L"Retry-After");
+    }
+
     DWORD cookieHeaderSize = 0;
     if (!WinHttpQueryHeaders(request.handle, WINHTTP_QUERY_SET_COOKIE,
                              WINHTTP_HEADER_NAME_BY_INDEX, nullptr,
@@ -327,7 +366,6 @@ bool HttpRequest(const Settings& settings,
         responseBytes.append(asyncState.readBuffer, read);
     }
 
-    response.status = status;
     response.body = Utf8ToWide(responseBytes);
     return true;
 }

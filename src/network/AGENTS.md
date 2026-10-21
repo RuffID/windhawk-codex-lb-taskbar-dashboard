@@ -9,6 +9,10 @@ context/read buffer до финального callback закрытия деск
 исходные ограничения повторов/таймаутов и не сохраняй секреты в логах.
 Авторизация dashboard принадлежит accounts/session.h; этот модуль её не выполняет.
 GitHub-запросы в versions/releases.h передают пустые cookie и bearer.
+HttpRequest по явному collectRateLimitHeaders считывает X-RateLimit-Remaining,
+X-RateLimit-Reset и Retry-After в HttpResponse; отсутствующий заголовок даёт пустую
+строку, неожиданные ошибки чтения не скрываются. Статус публикуется сразу после
+получения заголовков, даже если чтение тела позже завершилось ошибкой.
 
 ## Актуальность
 

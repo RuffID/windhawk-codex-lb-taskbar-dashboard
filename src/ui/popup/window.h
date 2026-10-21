@@ -6,13 +6,27 @@
 #include "../../core/text_json.h"
 #include "../../core/refresh_api.h"
 #include "../../accounts/usage.h"
-#include "../../versions/semver.h"
+#include <shellapi.h>
 
 namespace codex_dashboard {
 
 void TogglePopupWindow();
 
+std::wstring GetPopupLinkAt(POINT point) {
+    if (PtInRect(&g_popupGithubRect, point)) {
+        return std::wstring(CODEX_LB_GITHUB_URL) + L"/releases";
+    }
+    if (PtInRect(&g_popupModGithubRect, point)) {
+        return MOD_GITHUB_URL;
+    }
+    if (PtInRect(&g_popupReleaseRect, point)) {
+        return g_popupReleaseUrl;
+    }
+    return {};
+}
+
 void HidePopupWindow() {
+    g_popupPressedUrl.clear();
     if (g_popupMouseHook) {
         UnhookWindowsHookEx(g_popupMouseHook);
         g_popupMouseHook = nullptr;
@@ -145,75 +159,89 @@ LRESULT CALLBACK PopupWindowProc(HWND window,
             std::wstring versionText = dashboardVersion.current.empty()
                                            ? L"Текущая: н/д"
                                            : L"Текущая: " + dashboardVersion.current;
-            bool updateAvailable =
-                dashboardVersion.releaseCheckStatus == ReleaseCheckStatus::Succeeded &&
-                IsNewerReleaseVersion(dashboardVersion.latest,
-                                      dashboardVersion.current);
-            std::wstring updateText;
-            if (updateAvailable) {
-                updateText = L"↑ " + dashboardVersion.latest;
-            } else if (dashboardVersion.releaseCheckStatus !=
-                       ReleaseCheckStatus::Succeeded) {
-                updateText = dashboardVersion.releaseCheckStatus == ReleaseCheckStatus::Pending
-                                 ? L"проверка..."
-                                 : L"проверка н/д";
-            }
-            SIZE versionSize{}, updateSize{};
+            auto badge = GetPopupReleaseBadge(dashboardVersion);
+            SIZE updateSize{};
             HGDIOBJ oldFont = SelectObject(dc, smallFont);
-            GetTextExtentPoint32(dc, versionText.c_str(),
-                                 static_cast<int>(versionText.size()),
-                                 &versionSize);
-            GetTextExtentPoint32(dc, updateText.c_str(),
-                                 static_cast<int>(updateText.size()), &updateSize);
+            GetTextExtentPoint32(dc, badge.text.c_str(),
+                                 static_cast<int>(badge.text.size()), &updateSize);
             SelectObject(dc, oldFont);
-            int statusRight = refreshButtonRect.left - 12;
-            RECT updateRect{statusRight, refreshButtonRect.top, statusRight,
-                            refreshButtonRect.bottom};
-            if (!updateText.empty()) {
-                updateRect.left -= std::min<LONG>(175, updateSize.cx + 12);
-                if (updateAvailable) {
-                    HBRUSH updateBrush = CreateSolidBrush(RGB(80, 57, 9));
-                    HPEN updatePen = CreatePen(PS_SOLID, 1, RGB(246, 196, 83));
-                    HGDIOBJ oldBrush = SelectObject(dc, updateBrush);
-                    HGDIOBJ oldPen = SelectObject(dc, updatePen);
-                    RoundRect(dc, updateRect.left, updateRect.top, updateRect.right,
-                              updateRect.bottom, 6, 6);
-                    SelectObject(dc, oldPen);
-                    SelectObject(dc, oldBrush);
-                    DeleteObject(updatePen);
-                    DeleteObject(updateBrush);
-                }
-                RECT updateTextRect = updateRect;
-                InflateRect(&updateTextRect, -6, 0);
-                DrawPopupText(dc, smallFont,
-                              updateAvailable ? RGB(255, 220, 100) : RGB(178, 193, 213),
-                              updateText, updateTextRect,
-                              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-                statusRight = updateRect.left - 10;
+            RECT updateRect{POPUP_VERSION_LEFT, 38,
+                            std::min<LONG>(rect.right - POPUP_PADDING,
+                                           POPUP_VERSION_LEFT + updateSize.cx + 16), 60};
+            HPEN updatePen = CreatePen(PS_SOLID, 1, badge.borderColor);
+            GdiObjectGuard updatePenGuard{updatePen};
+            HGDIOBJ oldPen = SelectObject(dc, updatePen);
+            HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+            RoundRect(dc, updateRect.left, updateRect.top, updateRect.right,
+                      updateRect.bottom, 6, 6);
+            SelectObject(dc, oldPen);
+            SelectObject(dc, oldBrush);
+            RECT updateTextRect = updateRect;
+            InflateRect(&updateTextRect, -8, 0);
+            DrawPopupText(dc, smallFont, badge.textColor, badge.text, updateTextRect,
+                          DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            g_popupReleaseRect = {};
+            g_popupReleaseUrl = badge.releaseUrl;
+            if (!badge.releaseUrl.empty()) {
+                SIZE prefixSize{};
+                oldFont = SelectObject(dc, smallFont);
+                constexpr PCWSTR prefix = L"Доступно: ";
+                GetTextExtentPoint32(dc, prefix, static_cast<int>(wcslen(prefix)), &prefixSize);
+                SelectObject(dc, oldFont);
+                g_popupReleaseRect = updateTextRect;
+                g_popupReleaseRect.left += prefixSize.cx;
+                // Underline only the clickable tag, not the status prefix.
+                HPEN linkPen = CreatePen(PS_SOLID, 1, badge.textColor);
+                GdiObjectGuard linkPenGuard{linkPen};
+                oldPen = SelectObject(dc, linkPen);
+                MoveToEx(dc, g_popupReleaseRect.left, updateRect.bottom - 4, nullptr);
+                LineTo(dc, g_popupReleaseRect.right, updateRect.bottom - 4);
+                SelectObject(dc, oldPen);
             }
             RECT versionRect{
-                statusRight - std::min<LONG>(190, versionSize.cx),
-                refreshButtonRect.top, statusRight,
+                POPUP_VERSION_LEFT,
+                refreshButtonRect.top, refreshButtonRect.left - 12,
                 refreshButtonRect.bottom};
             DrawPopupText(dc, smallFont, RGB(198, 209, 224), versionText,
                           versionRect,
-                          DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                          DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
             std::wstring dashboardAddress =
                 FormatDashboardAddress(GetSettingsSnapshot().dashboardUrl);
             RECT addressRect{
                 POPUP_PADDING, refreshButtonRect.top,
-                versionRect.left - 12, refreshButtonRect.bottom};
+                versionRect.left - 36, refreshButtonRect.bottom};
+            SIZE addressSize{};
+            oldFont = SelectObject(dc, smallFont);
+            GetTextExtentPoint32(dc, dashboardAddress.c_str(),
+                                 static_cast<int>(dashboardAddress.size()), &addressSize);
+            SelectObject(dc, oldFont);
+            addressRect.right = std::min<LONG>(addressRect.right,
+                                              addressRect.left + addressSize.cx);
             DrawPopupText(dc, smallFont, RGB(198, 209, 224), dashboardAddress,
                           addressRect,
                           DT_LEFT | DT_VCENTER | DT_SINGLELINE |
                               DT_END_ELLIPSIS);
+            g_popupGithubRect = RECT{addressRect.right + 8, refreshButtonRect.top + 5,
+                                     addressRect.right + 24, refreshButtonRect.top + 21};
+            DrawPopupGithubIcon(canvas, g_popupGithubRect);
 
             RECT modVersionRect{remainingValueRect.right + 12, 40,
-                                refreshButtonRect.left - 12, 58};
+                                POPUP_VERSION_LEFT - 36, 58};
+            std::wstring modVersionText = L"Мод v." WH_MOD_VERSION;
+            SIZE modVersionSize{};
+            oldFont = SelectObject(dc, smallFont);
+            GetTextExtentPoint32(dc, modVersionText.c_str(),
+                                 static_cast<int>(modVersionText.size()), &modVersionSize);
+            SelectObject(dc, oldFont);
+            modVersionRect.right = std::min<LONG>(modVersionRect.right,
+                                                 modVersionRect.left + modVersionSize.cx);
             DrawPopupText(dc, smallFont, RGB(178, 193, 213),
-                          L"Мод v" WH_MOD_VERSION, modVersionRect,
-                          DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                          modVersionText, modVersionRect,
+                          DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            g_popupModGithubRect = RECT{modVersionRect.right + 8, 41,
+                                        modVersionRect.right + 24, 57};
+            DrawPopupGithubIcon(canvas, g_popupModGithubRect);
 
             RECT updatedTextRect{
                 refreshButtonRect.right + 8, refreshButtonRect.top,
@@ -314,7 +342,7 @@ LRESULT CALLBACK PopupWindowProc(HWND window,
                 InvalidatePopupRect(window, refreshButtonRect);
             }
 
-            if (hovered) {
+            if (hovered || !GetPopupLinkAt(point).empty()) {
                 SetCursor(LoadCursor(nullptr, IDC_HAND));
                 TRACKMOUSEEVENT trackMouseEvent{};
                 trackMouseEvent.cbSize = sizeof(trackMouseEvent);
@@ -348,6 +376,12 @@ LRESULT CALLBACK PopupWindowProc(HWND window,
                 return 0;
             }
 
+            g_popupPressedUrl = GetPopupLinkAt(point);
+            if (!g_popupPressedUrl.empty()) {
+                SetCapture(window);
+                return 0;
+            }
+
             break;
         }
 
@@ -357,6 +391,8 @@ LRESULT CALLBACK PopupWindowProc(HWND window,
             RECT refreshButtonRect = GetPopupRefreshButtonRect(rect);
             bool wasPressed = g_refreshButtonPressed;
             g_refreshButtonPressed = false;
+            std::wstring pressedUrl = std::move(g_popupPressedUrl);
+            g_popupPressedUrl.clear();
             if (GetCapture() == window) {
                 ReleaseCapture();
             }
@@ -368,9 +404,22 @@ LRESULT CALLBACK PopupWindowProc(HWND window,
                 QueueDashboardRefresh();
                 return 0;
             }
+            if (!pressedUrl.empty() && pressedUrl == GetPopupLinkAt(point)) {
+                auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(
+                    window, L"open", pressedUrl.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+                if (result <= 32) {
+                    Wh_Log(L"Failed to open GitHub link: %lld", static_cast<long long>(result));
+                }
+                return 0;
+            }
 
             break;
         }
+
+        case WM_CAPTURECHANGED:
+            g_popupPressedUrl.clear();
+            g_refreshButtonPressed = false;
+            return 0;
 
         case WM_DPICHANGED: {
             const auto* suggested = reinterpret_cast<const RECT*>(lParam);

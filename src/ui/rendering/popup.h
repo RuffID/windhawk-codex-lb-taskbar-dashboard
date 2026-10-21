@@ -2,6 +2,7 @@
 
 #include "../../core/state.h"
 #include "../../core/time.h"
+#include "../../versions/semver.h"
 
 namespace codex_dashboard {
 
@@ -42,6 +43,39 @@ constexpr COLORREF POPUP_CARD_COLOR = RGB(24, 32, 46);
 constexpr int POPUP_TITLE_FONT_HEIGHT = 14;
 constexpr int POPUP_BODY_FONT_HEIGHT = 13;
 constexpr int POPUP_SMALL_FONT_HEIGHT = 12;
+constexpr int POPUP_VERSION_LEFT = 240;
+constexpr COLORREF POPUP_DEFAULT_TEXT_COLOR = RGB(198, 209, 224);
+constexpr COLORREF POPUP_DEFAULT_BORDER_COLOR = RGB(46, 62, 84);
+
+struct PopupReleaseBadge {
+    std::wstring text;
+    std::wstring releaseUrl;
+    COLORREF borderColor = POPUP_DEFAULT_BORDER_COLOR;
+    COLORREF textColor = POPUP_DEFAULT_TEXT_COLOR;
+};
+
+PopupReleaseBadge GetPopupReleaseBadge(const DashboardVersion& version) {
+    if (version.releaseCheckStatus == ReleaseCheckStatus::Pending) {
+        return {L"Проверка версий…", {}};
+    }
+    if (version.releaseCheckStatus == ReleaseCheckStatus::RateLimited) {
+        return {L"Превышено число запросов в GitHub", {}, RGB(242, 113, 113)};
+    }
+    ReleaseVersion latest, current;
+    if (version.releaseCheckStatus == ReleaseCheckStatus::Failed ||
+        !ParseReleaseVersion(version.latest, latest)) {
+        return {L"Не удалось получить новые версии с GitHub", {}, RGB(242, 113, 113)};
+    }
+    if (!ParseReleaseVersion(version.current, current)) {
+        return {L"Не удалось определить текущую версию", {}, RGB(242, 113, 113)};
+    }
+    if (CompareReleaseVersions(latest, current) > 0) {
+        return {L"Доступно: " + version.latest,
+                std::wstring(CODEX_LB_GITHUB_URL) + L"/releases/tag/" + version.latest,
+                RGB(106, 212, 124)};
+    }
+    return {L"Нет новых версий", {}};
+}
 
 int ScalePopupLength(int length, UINT dpi) {
     return MulDiv(length, dpi, USER_DEFAULT_SCREEN_DPI);
@@ -215,6 +249,84 @@ struct PopupCanvas {
         }
     }
 };
+
+void DrawPopupGithubIcon(PopupCanvas& canvas, const RECT& rect) {
+    // The supplied 16x16 GitHub SVG, in thousandths; its two arcs use cubics.
+    static constexpr POINT outline[]{
+        {8000, 0},
+        {3580, 0}, {0, 3580}, {0, 8000},
+        {0, 11540}, {2290, 14530}, {5470, 15590},
+        {5870, 15660}, {6020, 15420}, {6020, 15210},
+        {6020, 15020}, {6010, 14390}, {6010, 13720},
+        {4000, 14090}, {3480, 13230}, {3320, 12780},
+        {3230, 12550}, {2840, 11840}, {2500, 11650},
+        {2220, 11500}, {1820, 11130}, {2490, 11120},
+        {3120, 11110}, {3570, 11700}, {3720, 11940},
+        {4440, 13150}, {5590, 12810}, {6050, 12600},
+        {6120, 12080}, {6330, 11730}, {6560, 11530},
+        {4780, 11330}, {2920, 10640}, {2920, 7580},
+        {2920, 6710}, {3230, 5990}, {3740, 5430},
+        {3660, 5230}, {3380, 4410}, {3820, 3310},
+        {3820, 3310}, {4490, 3100}, {6020, 4130},
+        {6665, 3954}, {7331, 3863}, {8000, 3860},
+        {8680, 3860}, {9360, 3950}, {10000, 4130},
+        {11530, 3090}, {12200, 3310}, {12200, 3310},
+        {12640, 4410}, {12360, 5230}, {12280, 5430},
+        {12790, 5990}, {13100, 6700}, {13100, 7580},
+        {13100, 10650}, {11230, 11330}, {9450, 11530},
+        {9740, 11780}, {9990, 12260}, {9990, 13010},
+        {9990, 14080}, {9980, 14940}, {9980, 15210},
+        {9980, 15420}, {10130, 15670}, {10530, 15590},
+        {13795, 14498}, {15997, 11443}, {16000, 8000},
+        {16000, 3580}, {12420, 0}, {8000, 0}
+    };
+    POINT corners[2]{{rect.left, rect.top}, {rect.right, rect.bottom}};
+    if (!LPtoDP(canvas.dc, corners, 2)) {
+        winrt::throw_last_error();
+    }
+    int width = corners[1].x - corners[0].x;
+    int height = corners[1].y - corners[0].y;
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+    constexpr int samples = 4;
+    PopupCanvas mask;
+    mask.Create(canvas.dc, width * samples, height * samples);
+    SetMapMode(mask.dc, MM_ANISOTROPIC);
+    SetWindowExtEx(mask.dc, 16000, 16000, nullptr);
+    SetViewportExtEx(mask.dc, mask.width, mask.height, nullptr);
+    if (!BeginPath(mask.dc) || !PolyBezier(mask.dc, outline, ARRAYSIZE(outline)) ||
+        !CloseFigure(mask.dc) || !EndPath(mask.dc)) {
+        winrt::throw_hresult(E_FAIL);
+    }
+    HGDIOBJ oldBrush = SelectObject(mask.dc, GetStockObject(WHITE_BRUSH));
+    BOOL filled = FillPath(mask.dc);
+    SelectObject(mask.dc, oldBrush);
+    if (!filled) {
+        winrt::throw_hresult(E_FAIL);
+    }
+    GdiFlush();
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int targetX = corners[0].x + x;
+            int targetY = corners[0].y + y;
+            if (targetX < 0 || targetX >= canvas.width ||
+                targetY < 0 || targetY >= canvas.height) {
+                continue;
+            }
+            unsigned coverage = 0;
+            for (int sy = 0; sy < samples; sy++) {
+                for (int sx = 0; sx < samples; sx++) {
+                    coverage += mask.pixels[(y * samples + sy) * mask.width +
+                                            x * samples + sx] & 0xFF;
+                }
+            }
+            auto& pixel = canvas.pixels[targetY * canvas.width + targetX];
+            pixel = BlendPopupTextPixel(pixel, RGB(198, 209, 224),
+                                        static_cast<BYTE>(coverage / (samples * samples)));
+        }
+    }
+}
 
 void DrawPopupBackground(HDC dc, const RECT& rect) {
     HBRUSH backgroundBrush = CreateSolidBrush(POPUP_BACKGROUND_COLOR);
