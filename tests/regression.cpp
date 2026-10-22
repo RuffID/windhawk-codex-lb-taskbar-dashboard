@@ -390,14 +390,14 @@ void TestPopupReleaseStatus() {
 
 void TestGitHubRateLimitSchedule() {
     ReleaseCacheData cache;
-    Require(ReserveReleaseCheck(cache, 1000) && cache.nextCheckUtc == 1120 &&
-                !ReserveReleaseCheck(cache, 1000) && !ReserveReleaseCheck(cache, 1119) &&
-                ReserveReleaseCheck(cache, 1120),
-            "repeated/manual checks bypassed the two-minute interval");
+    Require(ReserveReleaseCheck(cache, 1000) && cache.nextCheckUtc == 4600 &&
+                !ReserveReleaseCheck(cache, 1000) && !ReserveReleaseCheck(cache, 4599) &&
+                ReserveReleaseCheck(cache, 4600),
+            "repeated/manual checks bypassed the one-hour interval");
     HttpResponse response;
     response.status = 403;
     response.body = LR"({"message":"Resource not accessible"})";
-    Require(!IsGitHubRateLimited(response) && GetGitHubNextCheckUtc(response, 1000) == 1120,
+    Require(!IsGitHubRateLimited(response) && GetGitHubNextCheckUtc(response, 1000) == 4600,
             "ordinary forbidden response was misclassified as a rate limit");
     response.rateLimitRemaining = L"0";
     response.rateLimitReset = L"4600";
@@ -417,19 +417,19 @@ void TestGitHubRateLimitSchedule() {
             "secondary rate limit without headers was not deferred");
     response.status = 429;
     response.body.clear();
-    response.retryAfter = L"Thu, 01 Jan 1970 01:00:00 GMT";
-    Require(GetGitHubNextCheckUtc(response, 1000) == 3601,
+    response.retryAfter = L"Thu, 01 Jan 1970 02:00:00 GMT";
+    Require(GetGitHubNextCheckUtc(response, 1000) == 7201,
             "HTTP-date Retry-After was not respected");
     response.retryAfter = L"1";
-    Require(GetGitHubNextCheckUtc(response, 1000) == 1120,
+    Require(GetGitHubNextCheckUtc(response, 1000) == 4600,
             "short Retry-After bypassed the minimum interval");
     response.retryAfter = L"99999999999999999999999999";
     response.rateLimitReset = L"invalid";
     Require(GetGitHubNextCheckUtc(response, 1000) == 4600,
             "malformed rate-limit timestamps overflowed or disabled the backoff");
     response.status = 503;
-    response.retryAfter = L"300";
-    Require(!IsGitHubRateLimited(response) && GetGitHubNextCheckUtc(response, 1000) == 1300,
+    response.retryAfter = L"7200";
+    Require(!IsGitHubRateLimited(response) && GetGitHubNextCheckUtc(response, 1000) == 8200,
             "server Retry-After was ignored or mislabeled as rate limiting");
     std::cout << "PASS GitHub throttling, primary/secondary limits and retry deadlines\n";
 }
@@ -494,7 +494,7 @@ void TestSharedReleaseCache() {
         SharedReleaseCache shared;
         Require(shared.Open(path, cancel.handle), "reservation reopen was cancelled");
         auto data = shared.Read();
-        Require(!ReserveReleaseCheck(data, 5000) && data.nextCheckUtc == 5120,
+        Require(!ReserveReleaseCheck(data, 5000) && data.nextCheckUtc == 8600,
                 "unfinished request lost its persisted reservation");
         data.status = ReleaseCheckStatus::Succeeded;
         data.latest = L"v1.25.0-beta.10";

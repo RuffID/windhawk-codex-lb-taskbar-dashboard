@@ -7,7 +7,7 @@
   TaskbarRootState, общие константы и исходные глобальные объекты/блокировки;
   URL репозиториев codex-lb и мода, области ссылок popup и нажатая ссылка
   принадлежат UI-потоку; для значка репозитория мода есть отдельная область.
-  ReleaseCheckStatus включает RateLimited; интервал GitHub — 120 секунд,
+  ReleaseCheckStatus включает RateLimited; интервал GitHub — 3600 секунд,
   резервная пауза при лимите без срока — 3600 секунд. Локального release timer нет.
 - logging.h: Windhawk log и файловый журнал с исходным резервным путём.
 - text_json.h: UTF-8/UTF-16, trim, чтение environment, JSON helpers и адрес dashboard.

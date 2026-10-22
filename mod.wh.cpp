@@ -84,7 +84,7 @@ The taskbar shows a blue circled exclamation mark beside the percentage only
 when `/api/runtime/version` reports `updateAvailable: true`. This indicator
 uses codex-lb's latest-release check, independently of the popup's beta check.
 GitHub checks share a persistent per-user cache and an interprocess mutex.
-Requests are at least two minutes apart, including manual refresh and mod reloads.
+Requests are at least one hour apart, including manual refresh and mod reloads.
 Rate limiting defers checks until X-RateLimit-Reset/Retry-After allows them;
 without a usable deadline the mod waits one hour. Manual refresh still updates
 accounts immediately. Failed checks are shown as unavailable, not as
